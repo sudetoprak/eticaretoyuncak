@@ -1,7 +1,6 @@
 /* ─── UYGULAMA DURUMU ─────────────────────────────────────────── */
 let currentPage = 'dashboard';
 let currentUser = null;
-let adminLiveWS = null;
 const _productCache = {};
 
 /* ─── YARDIMCI FONKSİYONLAR ──────────────────────────────────── */
@@ -79,7 +78,6 @@ function cmdBadge(cmd) {
 /* ─── SAYFA GEÇİŞİ ───────────────────────────────────────────── */
 
 function navigate(page) {
-  if (currentPage === 'logs' && page !== 'logs') stopAdminLiveWS();
   currentPage = page;
 
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -88,7 +86,7 @@ function navigate(page) {
 
   const titles = {
     dashboard: 'Dashboard', users: 'Kullanıcılar', orders: 'Siparişler',
-    products: 'Ürünler', logs: 'Komut Logları', cars: 'Bağlı Arabalar',
+    products: 'Ürünler',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   document.getElementById('topbar-actions').innerHTML = '';
@@ -99,8 +97,6 @@ function navigate(page) {
     case 'users':     renderUsers();     break;
     case 'orders':    renderOrders();    break;
     case 'products':  renderProducts();  break;
-    case 'logs':      renderLogs();      break;
-    case 'cars':      renderCars();      break;
   }
 }
 
@@ -639,7 +635,7 @@ function bindUploadBtn() {
     uploadBtn.disabled = true; status.textContent = 'Yükleniyor...'; status.style.color = 'var(--text-muted)';
     try {
       const result = await API.uploadImage(file);
-      const fullUrl = result.url.startsWith('http') ? result.url : 'http://100.114.176.17:8000' + result.url;
+      const fullUrl = result.url.startsWith('http') ? result.url : (window.SC_BACKEND_ORIGIN || '') + result.url;
       const imagesArea = document.getElementById('pf-images');
       imagesArea.value = imagesArea.value ? imagesArea.value + '\n' + fullUrl : fullUrl;
       const img = document.createElement('img');
@@ -717,154 +713,6 @@ async function deleteProduct(id) {
   catch (ex) { toast(ex.message, 'error'); }
 }
 
-/* ─── KOMUT LOGLARI ────────────────────────────────────────────── */
-
-let logsPage = 1;
-const logsLimit = 50;
-
-function startAdminLiveWS() {
-  if (adminLiveWS && adminLiveWS.readyState === WebSocket.OPEN) return;
-  const token = localStorage.getItem('sc_token');
-  if (!token) return;
-  adminLiveWS = new WebSocket(`ws://100.114.176.17:8000/api/v1/ws/admin/live?token=${token}`);
-  adminLiveWS.onopen = () => {
-    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
-    if (dot) dot.style.background = '#22c55e';
-    if (lbl) lbl.textContent = 'Canlı';
-    adminLiveWS._pingInterval = setInterval(() => { if (adminLiveWS.readyState === WebSocket.OPEN) adminLiveWS.send('ping'); }, 30000);
-  };
-  adminLiveWS.onmessage = (e) => {
-    try { const msg = JSON.parse(e.data); if (msg.type === 'live_command') prependLiveRow(msg); } catch {}
-  };
-  adminLiveWS.onclose = () => {
-    clearInterval(adminLiveWS?._pingInterval);
-    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
-    if (dot) dot.style.background = '#ef4444'; if (lbl) lbl.textContent = 'Bağlantı kesildi';
-  };
-  adminLiveWS.onerror = () => {
-    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
-    if (dot) dot.style.background = '#f59e0b'; if (lbl) lbl.textContent = 'Hata';
-  };
-}
-
-function stopAdminLiveWS() {
-  if (adminLiveWS) { clearInterval(adminLiveWS._pingInterval); adminLiveWS.close(); adminLiveWS = null; }
-}
-
-function prependLiveRow(msg) {
-  const tbody = document.getElementById('live-log-tbody');
-  if (!tbody) return;
-  if (tbody.rows.length === 1 && tbody.rows[0].cells.length === 1) tbody.innerHTML = '';
-  while (tbody.rows.length >= 100) tbody.deleteRow(tbody.rows.length - 1);
-  const tr = document.createElement('tr');
-  tr.innerHTML = `
-    <td>${cmdBadge(msg.command)}</td>
-    <td><strong>${msg.username || '?'}</strong></td>
-    <td>${msg.car_id}</td>
-    <td>${msg.speed ?? '-'}</td>
-    <td>${(msg.x_axis ?? 0).toFixed(2)}</td>
-    <td>${(msg.y_axis ?? 0).toFixed(2)}</td>
-    <td>${msg.latency_ms != null ? msg.latency_ms + ' ms' : '-'}</td>
-    <td><span style="color:${msg.car_reached ? '#22c55e' : '#ef4444'}">${msg.car_reached ? '✓' : '✗'}</span></td>
-    <td>${fmt(msg.timestamp)}</td>`;
-  tbody.insertBefore(tr, tbody.firstChild);
-  const counter = document.getElementById('live-count');
-  if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
-}
-
-async function renderLogs(page = 1) {
-  logsPage = page;
-  const cmdFilter = document.getElementById('log-cmd-filter')?.value || '';
-  try {
-    const params = { page, limit: logsLimit, hours: 168 };
-    if (cmdFilter) params.command = cmdFilter;
-    const { logs, total } = await API.getLogs(params);
-    const totalPages = Math.ceil(total / logsLimit);
-
-    document.getElementById('content').innerHTML = `
-      <div class="card" style="margin-bottom:20px">
-        <div class="card-header" style="display:flex;align-items:center;gap:10px">
-          <span class="card-title">Canlı Komut Akışı</span>
-          <span id="live-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b7280;margin-left:4px"></span>
-          <span id="live-label" style="font-size:12px;color:var(--text-muted)">Bağlanıyor...</span>
-          <span style="margin-left:auto;font-size:12px;color:var(--text-muted)">Bu oturumda: <strong id="live-count">0</strong> komut</span>
-        </div>
-        <div class="table-wrapper" style="max-height:280px;overflow-y:auto">
-          <table>
-            <thead><tr><th>Komut</th><th>Kullanıcı</th><th>Araba</th><th>Hız</th><th>X</th><th>Y</th><th>Gecikme</th><th>Ulaştı</th><th>Zaman</th></tr></thead>
-            <tbody id="live-log-tbody">
-              <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px">Joystick'ten komut bekleniyor...</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-header"><span class="card-title">Geçmiş Loglar (Son 7 Gün)</span></div>
-        <div class="filters">
-          <div class="form-group">
-            <select id="log-cmd-filter">
-              <option value="">Tüm Komutlar</option>
-              ${['forward','backward','left','right','stop'].map(c => `<option value="${c}" ${cmdFilter===c?'selected':''}>${c}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn btn-primary btn-sm" id="log-filter-btn">Filtrele</button>
-        </div>
-        <div class="table-wrapper">
-          <table>
-            <thead><tr><th>Komut</th><th>Kullanıcı</th><th>Hız</th><th>X</th><th>Y</th><th>Gecikme</th><th>Zaman</th></tr></thead>
-            <tbody>
-              ${logs.length === 0 ? `<tr><td colspan="7">${empty('Log bulunamadı', '📋')}</td></tr>` : logs.map(l => `
-              <tr>
-                <td>${cmdBadge(l.command)}</td>
-                <td><code style="font-size:11px">${l.user_id?.slice(-8) || '-'}</code></td>
-                <td>${l.speed ?? '-'}</td>
-                <td>${l.x_axis?.toFixed(2) ?? '-'}</td>
-                <td>${l.y_axis?.toFixed(2) ?? '-'}</td>
-                <td>${l.latency_ms != null ? l.latency_ms + ' ms' : '-'}</td>
-                <td>${fmt(l.timestamp)}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div class="pagination">
-          <span class="pagination-info">Son 7 günde ${total} komut — Sayfa ${page}/${totalPages || 1}</span>
-          <div class="pagination-btns">
-            <button class="btn btn-outline btn-sm" ${page<=1?'disabled':''} onclick="renderLogs(${page-1})">← Önceki</button>
-            <button class="btn btn-outline btn-sm" ${page>=totalPages?'disabled':''} onclick="renderLogs(${page+1})">Sonraki →</button>
-          </div>
-        </div>
-      </div>`;
-
-    document.getElementById('log-filter-btn').addEventListener('click', () => renderLogs(1));
-    startAdminLiveWS();
-  } catch (ex) {
-    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Loglar yüklenemedi: ${ex.message}</div>`;
-  }
-}
-
-/* ─── BAĞLI ARABALAR ──────────────────────────────────────────── */
-
-async function renderCars() {
-  try {
-    const data = await API.getConnectedCars();
-    document.getElementById('content').innerHTML = `
-      <div class="stats-grid" style="max-width:400px">
-        <div class="stat-card green"><span class="stat-label">Bağlı Araba</span><span class="stat-value">${data.count}</span><span class="stat-sub">Anlık WebSocket bağlantısı</span></div>
-      </div>
-      <div class="card" style="max-width:600px">
-        <div class="card-header"><span class="card-title">Araba Listesi</span><button class="btn btn-outline btn-sm" onclick="renderCars()">Yenile</button></div>
-        ${data.count === 0 ? empty('Şu an bağlı araba yok', '🚗') : `
-        <div class="table-wrapper">
-          <table>
-            <thead><tr><th>Araba ID</th><th>Controller Sayısı</th></tr></thead>
-            <tbody>${data.car_ids.map(id => `<tr><td><code>${id}</code></td><td>${data.controller_counts?.[id] ?? 0}</td></tr>`).join('')}</tbody>
-          </table>
-        </div>`}
-      </div>`;
-  } catch (ex) {
-    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Arabalar yüklenemedi: ${ex.message}</div>`;
-  }
-}
 
 /* ─── BAŞLAT ──────────────────────────────────────────────────── */
 init();
