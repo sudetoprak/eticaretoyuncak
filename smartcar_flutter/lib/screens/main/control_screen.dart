@@ -95,14 +95,7 @@ class _ControlScreenState extends State<ControlScreen> {
 
     // 1. ESP32'ye direkt gönder
     try {
-      await _espDio.get(
-        '$_esp32BaseUrl/$command',
-        queryParameters: {
-          'speed': _speed,
-          'x': (_joystickOffset.dx / _maxDist).toStringAsFixed(2),
-          'y': (_joystickOffset.dy / _maxDist).toStringAsFixed(2),
-        },
-      );
+      await _espDio.get('$_esp32BaseUrl/control?cmd=$command');
       reached = true;
     } catch (_) {
       // ESP32'ye ulaşılamadı — yine de log'la

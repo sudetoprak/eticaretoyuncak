@@ -1,6 +1,7 @@
 /* ─── UYGULAMA DURUMU ─────────────────────────────────────────── */
 let currentPage = 'dashboard';
 let currentUser = null;
+
 const _productCache = {};
 
 /* ─── YARDIMCI FONKSİYONLAR ──────────────────────────────────── */
@@ -62,19 +63,6 @@ function activeBadge(active) {
   return active ? badge('Aktif', 'active') : badge('Pasif', 'inactive');
 }
 
-const CMD_COLORS = {
-  forward:  '#22c55e',
-  backward: '#ef4444',
-  left:     '#3b82f6',
-  right:    '#f59e0b',
-  stop:     '#6b7280',
-};
-
-function cmdBadge(cmd) {
-  const color = CMD_COLORS[cmd] || '#6b7280';
-  return `<span class="badge" style="background:${color}20;color:${color};border:1px solid ${color}40;font-weight:700">${cmd}</span>`;
-}
-
 /* ─── SAYFA GEÇİŞİ ───────────────────────────────────────────── */
 
 function navigate(page) {
@@ -86,7 +74,7 @@ function navigate(page) {
 
   const titles = {
     dashboard: 'Dashboard', users: 'Kullanıcılar', orders: 'Siparişler',
-    products: 'Ürünler',
+    products: 'Ürünler', cars: 'Bağlı Arabalar',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   document.getElementById('topbar-actions').innerHTML = '';
@@ -97,6 +85,7 @@ function navigate(page) {
     case 'users':     renderUsers();     break;
     case 'orders':    renderOrders();    break;
     case 'products':  renderProducts();  break;
+    case 'cars':      renderCars();      break;
   }
 }
 
@@ -635,7 +624,7 @@ function bindUploadBtn() {
     uploadBtn.disabled = true; status.textContent = 'Yükleniyor...'; status.style.color = 'var(--text-muted)';
     try {
       const result = await API.uploadImage(file);
-      const fullUrl = result.url.startsWith('http') ? result.url : (window.SC_BACKEND_ORIGIN || '') + result.url;
+      const fullUrl = result.url.startsWith('http') ? result.url : 'http://100.114.176.17:8000' + result.url;
       const imagesArea = document.getElementById('pf-images');
       imagesArea.value = imagesArea.value ? imagesArea.value + '\n' + fullUrl : fullUrl;
       const img = document.createElement('img');
@@ -713,6 +702,29 @@ async function deleteProduct(id) {
   catch (ex) { toast(ex.message, 'error'); }
 }
 
+/* ─── BAĞLI ARABALAR ──────────────────────────────────────────── */
+
+async function renderCars() {
+  try {
+    const data = await API.getConnectedCars();
+    document.getElementById('content').innerHTML = `
+      <div class="stats-grid" style="max-width:400px">
+        <div class="stat-card green"><span class="stat-label">Bağlı Araba</span><span class="stat-value">${data.count}</span><span class="stat-sub">Anlık WebSocket bağlantısı</span></div>
+      </div>
+      <div class="card" style="max-width:600px">
+        <div class="card-header"><span class="card-title">Araba Listesi</span><button class="btn btn-outline btn-sm" onclick="renderCars()">Yenile</button></div>
+        ${data.count === 0 ? empty('Şu an bağlı araba yok', '🚗') : `
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Araba ID</th><th>Controller Sayısı</th></tr></thead>
+            <tbody>${data.car_ids.map(id => `<tr><td><code>${id}</code></td><td>${data.controller_counts?.[id] ?? 0}</td></tr>`).join('')}</tbody>
+          </table>
+        </div>`}
+      </div>`;
+  } catch (ex) {
+    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Arabalar yüklenemedi: ${ex.message}</div>`;
+  }
+}
 
 /* ─── BAŞLAT ──────────────────────────────────────────────────── */
 init();

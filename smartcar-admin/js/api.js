@@ -1,22 +1,6 @@
 /* ─── API MODÜLÜ ─────────────────────────────────────────────── */
 
-const DEFAULT_BACKEND_ORIGIN = 'http://10.245.2.56:8000';
-
-function getBackendOrigin() {
-  const saved = localStorage.getItem('sc_backend_origin');
-  if (saved) return saved.replace(/\/$/, '');
-
-  if (location.protocol.startsWith('http') && location.hostname) {
-    return `${location.protocol}//${location.hostname}:8000`;
-  }
-
-  return DEFAULT_BACKEND_ORIGIN;
-}
-
-const BACKEND_ORIGIN = getBackendOrigin();
-const BASE = `${BACKEND_ORIGIN}/api/v1`;
-window.SC_BACKEND_ORIGIN = BACKEND_ORIGIN;
-window.SC_API_BASE = BASE;
+const BASE = 'http://100.114.176.17:8000/api/v1';
 
 function getToken() { return localStorage.getItem('sc_token'); }
 
@@ -99,5 +83,6 @@ const API = {
   deleteProduct:    (id)          => apiFetch(`/products/${id}`, { method: 'DELETE' }),
   uploadImage:      (file)        => apiUpload('/products/upload-image', file),
 
+  // Bağlı arabalar
+  getConnectedCars: () => apiFetch('/admin/cars/connected'),
 };
-
