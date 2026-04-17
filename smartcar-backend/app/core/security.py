@@ -43,11 +43,13 @@ def decode_token(token: str) -> dict:
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = decode_token(token)
     user_id = payload.get("sub")
+    col     = payload.get("col", "users")   # "users" veya "admins"
     if not user_id:
         raise HTTPException(status_code=401, detail="Geçersiz token")
     db = get_db()
     from bson import ObjectId
-    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    collection = db.admins if col == "admins" else db.users
+    user = await collection.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=401, detail="Kullanıcı bulunamadı")
     return user

@@ -1,9 +1,12 @@
-from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File
 from datetime import datetime
 from bson import ObjectId
 from typing import List, Optional
+import os
+import uuid
 from app.core.database import get_db
 from app.core.security import get_current_user, get_current_admin
+from app.core.config import settings
 from app.schemas.schemas import ProductCreate, ProductResponse, ProductUpdate
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -35,6 +38,26 @@ async def list_products(
     products = await cursor.to_list(length=limit)
     return [serialize_product(p) for p in products]
 
+@router.post("/upload-image")
+async def upload_image(file: UploadFile = File(...), admin=Depends(get_current_admin)):
+    if not file.filename:
+        raise HTTPException(400, "Dosya adı bulunamadı")
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if ext not in ["jpg", "jpeg", "png", "webp"]:
+        raise HTTPException(400, "Sadece jpg, jpeg, png, webp desteklenir")
+    filename = f"{uuid.uuid4()}.{ext}"
+    save_dir = settings.uploads_dir
+    os.makedirs(save_dir, exist_ok=True)
+    path = os.path.join(save_dir, filename)
+    try:
+        content = await file.read()
+        with open(path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(500, f"Dosya kaydedilemedi: {str(e)}")
+    base = settings.SERVER_BASE_URL.rstrip("/")
+    return {"url": f"{base}/uploads/{filename}"}
+
 @router.get("/{product_id}", response_model=ProductResponse)
 async def get_product(product_id: str):
     db = get_db()
@@ -46,22 +69,6 @@ async def get_product(product_id: str):
     if not product:
         raise HTTPException(404, "Ürün bulunamadı")
     return serialize_product(product)
-
-@router.post("/upload-image")
-async def upload_image(request: Request, file: UploadFile = File(...), admin=Depends(get_current_admin)):
-    import os, uuid, aiofiles
-    ext = file.filename.split(".")[-1].lower()
-    if ext not in ["jpg", "jpeg", "png", "webp"]:
-        raise HTTPException(400, "Sadece jpg, png, webp desteklenir")
-    filename = f"{uuid.uuid4()}.{ext}"
-    save_dir = "uploads"
-    os.makedirs(save_dir, exist_ok=True)
-    path = os.path.join(save_dir, filename)
-    async with aiofiles.open(path, "wb") as f:
-        content = await file.read()
-        await f.write(content)
-    base = str(request.base_url).rstrip("/")
-    return {"url": f"{base}/uploads/{filename}"}
 
 @router.post("/", response_model=ProductResponse)
 async def create_product(data: ProductCreate, admin=Depends(get_current_admin)):

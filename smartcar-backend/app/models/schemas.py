@@ -3,7 +3,8 @@ MongoDB koleksiyon şemaları — referans amaçlıdır.
 Motor ile doğrudan dict kullanıyoruz ama burada yapıyı netleştiriyoruz.
 
 Collections:
-  - users
+  - users   (role = "user")
+  - admins  (role = "admin")
   - products
   - orders
   - cart
@@ -11,13 +12,13 @@ Collections:
   - sessions (WebSocket)
 """
 
-# users
+# users — sadece normal kullanıcılar (role="user")
 USER_SCHEMA = {
     "_id": "ObjectId",
     "email": "str",
     "username": "str",
     "password_hash": "str",
-    "role": "str",           # "user" | "admin"
+    "role": "str",           # her zaman "user"
     "full_name": "str",
     "phone": "str",
     "address": {

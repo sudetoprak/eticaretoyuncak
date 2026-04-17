@@ -47,8 +47,8 @@ async def register(data: RegisterRequest):
     user_id = str(result.inserted_id)
 
     return TokenResponse(
-        access_token=create_access_token({"sub": user_id}),
-        refresh_token=create_refresh_token({"sub": user_id}),
+        access_token=create_access_token({"sub": user_id, "col": "users"}),
+        refresh_token=create_refresh_token({"sub": user_id, "col": "users"}),
     )
 
 
@@ -57,52 +57,57 @@ async def admin_register(data: RegisterRequest):
     """
     İlk admin kaydı: DB'de hiç admin yoksa serbest,
     sonraki admin kayıtları mevcut bir admin token'ı gerektirir.
-    Admin panel login ekranındaki 'Admin Kaydı' formu buraya gelir.
+    Adminler ayrı 'admins' koleksiyonuna kaydedilir.
     """
     db = get_db()
 
-    # Var olan admin sayısını kontrol et
-    existing_admin_count = await db.users.count_documents({"role": "admin"})
+    # Var olan admin sayısını 'admins' koleksiyonunda kontrol et
+    existing_admin_count = await db.admins.count_documents({})
     if existing_admin_count > 0:
-        # Zaten admin var — bu endpoint'i korumak için basit bir secret key kontrolü
-        # Üretimde bunu kaldırıp mevcut admin token'ı zorunlu yapabilirsin
         raise HTTPException(
             403,
             "Admin kaydı kapalı. İlk admin zaten oluşturulmuş. "
             "Yeni admin eklemek için mevcut bir admin hesabıyla /admin/users endpoint'ini kullanın."
         )
 
-    if await db.users.find_one({"email": data.email}):
+    if await db.admins.find_one({"email": data.email}):
         raise HTTPException(400, "Bu email zaten kayıtlı")
-    if await db.users.find_one({"username": data.username}):
+    if await db.admins.find_one({"username": data.username}):
         raise HTTPException(400, "Bu kullanıcı adı alınmış")
 
-    user = {
+    admin = {
         "email":         data.email,
         "username":      data.username,
         "password_hash": hash_password(data.password),
         "full_name":     data.full_name,
         "phone":         data.phone,
-        "role":          "admin",          # ← fark burada
+        "role":          "admin",
         "language":      data.language,
         "address":       None,
         "is_active":     True,
         "created_at":    datetime.utcnow(),
         "updated_at":    datetime.utcnow(),
     }
-    result = await db.users.insert_one(user)
-    user_id = str(result.inserted_id)
+    result = await db.admins.insert_one(admin)
+    admin_id = str(result.inserted_id)
 
     return TokenResponse(
-        access_token=create_access_token({"sub": user_id}),
-        refresh_token=create_refresh_token({"sub": user_id}),
+        access_token=create_access_token({"sub": admin_id, "col": "admins"}),
+        refresh_token=create_refresh_token({"sub": admin_id, "col": "admins"}),
     )
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest):
     db = get_db()
+
+    # Önce kullanıcılar, sonra adminler koleksiyonuna bak
     user = await db.users.find_one({"email": data.email})
+    col  = "users"
+    if not user:
+        user = await db.admins.find_one({"email": data.email})
+        col  = "admins"
+
     if not user or not verify_password(data.password, user["password_hash"]):
         raise HTTPException(401, "Email veya şifre hatalı")
     if not user.get("is_active"):
@@ -110,8 +115,8 @@ async def login(data: LoginRequest):
 
     user_id = str(user["_id"])
     return TokenResponse(
-        access_token=create_access_token({"sub": user_id}),
-        refresh_token=create_refresh_token({"sub": user_id}),
+        access_token=create_access_token({"sub": user_id, "col": col}),
+        refresh_token=create_refresh_token({"sub": user_id, "col": col}),
     )
 
 
@@ -121,9 +126,10 @@ async def refresh_token(data: RefreshRequest):
     if payload.get("type") != "refresh":
         raise HTTPException(401, "Geçersiz refresh token")
     user_id = payload.get("sub")
+    col     = payload.get("col", "users")
     return TokenResponse(
-        access_token=create_access_token({"sub": user_id}),
-        refresh_token=create_refresh_token({"sub": user_id}),
+        access_token=create_access_token({"sub": user_id, "col": col}),
+        refresh_token=create_refresh_token({"sub": user_id, "col": col}),
     )
 
 

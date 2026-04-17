@@ -15,6 +15,7 @@ async def log_command_direct(data: dict, user=Depends(get_current_user)):
     """
     db = get_db()
     log_ts = datetime.utcnow()
+    
     latency_ms = data.get("latency_ms", 0)
     car_reached = data.get("car_reached", True)
 

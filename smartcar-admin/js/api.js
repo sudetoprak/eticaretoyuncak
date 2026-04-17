@@ -29,14 +29,32 @@ async function apiFetch(path, options = {}) {
 
 async function apiUpload(path, file) {
   const token = getToken();
+  if (!token) {
+    localStorage.removeItem('sc_token');
+    localStorage.removeItem('sc_user');
+    location.reload();
+    throw new Error('Oturum bulunamadı');
+  }
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch(BASE + path, {
-    method: 'POST',
-    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-    body: formData,
-  });
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: formData,
+    });
+  } catch (networkErr) {
+    throw new Error('Sunucuya bağlanılamadı. Sunucunun çalıştığından emin olun.');
+  }
+
+  if (res.status === 401) {
+    localStorage.removeItem('sc_token');
+    localStorage.removeItem('sc_user');
+    location.reload();
+    throw new Error('Oturum süresi doldu');
+  }
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
@@ -60,7 +78,10 @@ const API = {
   me: () => apiFetch('/auth/me'),
 
   // Admin - Dashboard
-  dashboard: () => apiFetch('/admin/dashboard'),
+  dashboard:    () => apiFetch('/admin/dashboard'),
+  charts:       () => apiFetch('/admin/charts'),
+  recentOrders: () => apiFetch('/admin/recent-orders'),
+  lowStock:     () => apiFetch('/admin/low-stock'),
 
   // Admin - Kullanıcılar
   getUsers:   (params = {}) => apiFetch('/admin/users?' + new URLSearchParams(params)),

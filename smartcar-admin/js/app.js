@@ -1,7 +1,9 @@
 /* ─── UYGULAMA DURUMU ─────────────────────────────────────────── */
 let currentPage = 'dashboard';
 let currentUser = null;
-
+let adminLiveWS = null;
+let logsPollInterval = null;
+const liveSeenKeys = new Set();
 const _productCache = {};
 
 /* ─── YARDIMCI FONKSİYONLAR ──────────────────────────────────── */
@@ -63,9 +65,26 @@ function activeBadge(active) {
   return active ? badge('Aktif', 'active') : badge('Pasif', 'inactive');
 }
 
+const CMD_COLORS = {
+  forward:  '#22c55e',
+  backward: '#ef4444',
+  left:     '#3b82f6',
+  right:    '#f59e0b',
+  stop:     '#6b7280',
+};
+
+function cmdBadge(cmd) {
+  const color = CMD_COLORS[cmd] || '#6b7280';
+  return `<span class="badge" style="background:${color}20;color:${color};border:1px solid ${color}40;font-weight:700">${cmd}</span>`;
+}
+
 /* ─── SAYFA GEÇİŞİ ───────────────────────────────────────────── */
 
 function navigate(page) {
+  if (currentPage === 'logs' && page !== 'logs') {
+    stopAdminLiveWS();
+    stopLogsPolling();
+  }
   currentPage = page;
 
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -74,7 +93,7 @@ function navigate(page) {
 
   const titles = {
     dashboard: 'Dashboard', users: 'Kullanıcılar', orders: 'Siparişler',
-    products: 'Ürünler', cars: 'Bağlı Arabalar',
+    products: 'Ürünler', logs: 'Komut Logları', cars: 'Bağlı Arabalar',
   };
   document.getElementById('page-title').textContent = titles[page] || page;
   document.getElementById('topbar-actions').innerHTML = '';
@@ -85,6 +104,7 @@ function navigate(page) {
     case 'users':     renderUsers();     break;
     case 'orders':    renderOrders();    break;
     case 'products':  renderProducts();  break;
+    case 'logs':      renderLogs();      break;
     case 'cars':      renderCars();      break;
   }
 }
@@ -200,46 +220,130 @@ window.addEventListener('hashchange', () => {
 
 /* ─── DASHBOARD ───────────────────────────────────────────────── */
 
+function drawBarChart(canvasId, labels, values, color, unit) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = { top: 20, right: 12, bottom: 36, left: 56 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+  const max = Math.max(...values, 1);
+
+  ctx.clearRect(0, 0, W, H);
+
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + cH - (i / 4) * cH;
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = max * i / 4;
+    const lbl = unit === '\u20ba'
+      ? (val >= 1000 ? (val/1000).toFixed(1) + 'K' : val.toFixed(0)) + '\u20ba'
+      : Math.round(val).toString();
+    ctx.fillStyle = '#94a3b8'; ctx.font = '10px system-ui'; ctx.textAlign = 'right';
+    ctx.fillText(lbl, pad.left - 4, y + 3);
+  }
+
+  const gap = cW / labels.length;
+  const barW = Math.max(Math.floor(gap * 0.55), 8);
+  labels.forEach((lbl, i) => {
+    const bH = (values[i] / max) * cH;
+    const x = pad.left + i * gap + (gap - barW) / 2;
+    const y = pad.top + cH - bH;
+    const grad = ctx.createLinearGradient(0, y, 0, y + bH);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, color + '55');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, barW, bH, [3, 3, 0, 0]);
+    else ctx.rect(x, y, barW, bH);
+    ctx.fill();
+    if (values[i] > 0) {
+      ctx.fillStyle = '#475569'; ctx.font = 'bold 9px system-ui'; ctx.textAlign = 'center';
+      const v = unit === '\u20ba'
+        ? (values[i] >= 1000 ? (values[i]/1000).toFixed(1)+'K' : values[i].toFixed(0))
+        : values[i].toString();
+      ctx.fillText(v, x + barW / 2, y - 4);
+    }
+    ctx.fillStyle = '#64748b'; ctx.font = '10px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(lbl, x + barW / 2, H - 8);
+  });
+}
+
 async function renderDashboard() {
   try {
-    const d = await API.dashboard();
+    const [d, charts, recentRes, lowStockRes] = await Promise.all([
+      API.dashboard(),
+      API.charts(),
+      API.recentOrders(),
+      API.lowStock(),
+    ]);
+
     const users = d?.users || {}, orders = d?.orders || {}, revenue = d?.revenue || {};
-    const products = d?.products || {}, commands = d?.commands || {};
-    const dist = commands?.distribution || {}, byStatus = orders?.by_status || {};
-    const maxCmd = Object.values(dist).length > 0 ? Math.max(...Object.values(dist), 1) : 1;
+    const products = d?.products || {};
+    const byStatus = orders?.by_status || {};
+    const recentOrders = recentRes?.orders || [];
+    const lowStockItems = lowStockRes?.products || [];
+    const revChart = charts?.revenue_chart || [];
+    const ordChart = charts?.orders_chart || [];
 
     document.getElementById('content').innerHTML = `
       <div class="stats-grid">
-        <div class="stat-card blue"><span class="stat-label">Toplam Kullanıcı</span><span class="stat-value">${users.total ?? 0}</span><span class="stat-sub">Aktif: ${users.active ?? 0} · Bugün +${users.new_today ?? 0}</span></div>
-        <div class="stat-card green"><span class="stat-label">Toplam Sipariş</span><span class="stat-value">${orders.total ?? 0}</span><span class="stat-sub">Bekleyen: ${byStatus.pending ?? 0} · Bugün: ${orders.today ?? 0}</span></div>
-        <div class="stat-card yellow"><span class="stat-label">Toplam Gelir</span><span class="stat-value">${fmtMoney(revenue.total)}</span><span class="stat-sub">Bugün: ${fmtMoney(revenue.today)}</span></div>
-        <div class="stat-card"><span class="stat-label">Ürünler</span><span class="stat-value">${products.active ?? 0}</span><span class="stat-sub">Düşük stok: ${products.low_stock ?? 0}</span></div>
-        <div class="stat-card blue"><span class="stat-label">Komutlar (Bugün)</span><span class="stat-value">${commands.today ?? 0}</span><span class="stat-sub">Toplam: ${commands.total ?? 0} · Bu hafta: ${commands.week ?? 0}</span></div>
-        <div class="stat-card green"><span class="stat-label">Bağlı Araba</span><span class="stat-value">${d?.connected_cars ?? 0}</span><span class="stat-sub">Anlık WebSocket</span></div>
+        <div class="stat-card blue"><span class="stat-label">Toplam Kullan\u0131c\u0131</span><span class="stat-value">${users.total ?? 0}</span><span class="stat-sub">Aktif: ${users.active ?? 0} \u00b7 Bug\u00fcn +${users.new_today ?? 0}</span></div>
+        <div class="stat-card green"><span class="stat-label">Toplam Sipari\u015f</span><span class="stat-value">${orders.total ?? 0}</span><span class="stat-sub">Bekleyen: ${byStatus.pending ?? 0} \u00b7 Bug\u00fcn: ${orders.today ?? 0}</span></div>
+        <div class="stat-card yellow"><span class="stat-label">Toplam Gelir</span><span class="stat-value">${fmtMoney(revenue.total)}</span><span class="stat-sub">Bug\u00fcn: ${fmtMoney(revenue.today)}</span></div>
+        <div class="stat-card"><span class="stat-label">\u00dcr\u00fcnler</span><span class="stat-value">${products.active ?? 0}</span><span class="stat-sub">D\u00fc\u015f\u00fck stok: ${products.low_stock ?? 0}</span></div>
       </div>
-      <div class="section-grid">
+
+      <div class="section-grid" style="margin-top:20px">
         <div class="card">
-          <div class="card-header"><span class="card-title">Sipariş Durumları</span></div>
-          <ul class="cmd-dist-list">
-            ${Object.keys(byStatus).length === 0
-              ? `<p style="color:var(--text-muted);font-size:13px">Henüz sipariş yok.</p>`
-              : Object.entries(byStatus).map(([k,v]) => `<li class="cmd-dist-item"><span>${statusBadge(k)}</span><strong>${v}</strong></li>`).join('')}
-          </ul>
+          <div class="card-header"><span class="card-title">\ud83d\udcc8 G\u00fcnl\u00fck Gelir (Son 7 G\u00fcn)</span></div>
+          <canvas id="revenue-chart" width="460" height="190" style="width:100%;display:block"></canvas>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">Komut Dağılımı (24s)</span></div>
-          ${Object.keys(dist).length === 0
-            ? `<p style="color:var(--text-muted);font-size:13px">Bugün henüz komut yok.</p>`
-            : `<ul class="cmd-dist-list">${Object.entries(dist).sort((a,b)=>b[1]-a[1]).map(([cmd,cnt])=>`
-              <li class="cmd-dist-item">
-                <span style="width:90px;font-weight:600">${cmd}</span>
-                <div style="flex:1;margin:0 12px"><div class="cmd-bar" style="width:${Math.round(cnt/maxCmd*100)}%"></div></div>
-                <strong>${cnt}</strong>
-              </li>`).join('')}</ul>`}
+          <div class="card-header"><span class="card-title">\ud83d\udce6 Sipari\u015f Say\u0131s\u0131 (Son 7 G\u00fcn)</span></div>
+          <canvas id="orders-chart" width="460" height="190" style="width:100%;display:block"></canvas>
+        </div>
+      </div>
+
+      <div class="section-grid" style="margin-top:20px">
+        <div class="card">
+          <div class="card-header"><span class="card-title">\ud83e\uddfe Son Sipari\u015fler</span></div>
+          ${recentOrders.length === 0
+            ? `<p style="color:var(--text-muted);font-size:13px;padding:8px 0">Hen\u00fcz sipari\u015f yok.</p>`
+            : `<table style="width:100%">
+                <thead><tr><th>ID</th><th>Toplam</th><th>Durum</th><th>Tarih</th></tr></thead>
+                <tbody>${recentOrders.map(o => `
+                <tr>
+                  <td><code style="font-size:11px">${o.id.slice(-8)}</code></td>
+                  <td><strong>${fmtMoney(o.total)}</strong></td>
+                  <td>${statusBadge(o.status)}</td>
+                  <td style="font-size:12px;color:var(--text-muted)">${fmt(o.created_at)}</td>
+                </tr>`).join('')}</tbody>
+              </table>`}
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">\u26a0\ufe0f D\u00fc\u015f\u00fck Stok (\u226410)</span></div>
+          ${lowStockItems.length === 0
+            ? `<p style="color:var(--text-muted);font-size:13px;padding:8px 0">D\u00fc\u015f\u00fck stoklu \u00fcr\u00fcn yok \ud83c\udf89</p>`
+            : `<table style="width:100%">
+                <thead><tr><th>\u00dcr\u00fcn</th><th>Stok</th></tr></thead>
+                <tbody>${lowStockItems.map(p => `
+                <tr>
+                  <td>${p.name}</td>
+                  <td><span style="color:${p.stock<=3?'var(--danger)':'var(--warning)'};font-weight:700">${p.stock}</span></td>
+                </tr>`).join('')}</tbody>
+              </table>`}
         </div>
       </div>`;
+
+    requestAnimationFrame(() => {
+      drawBarChart('revenue-chart', revChart.map(r => r.date), revChart.map(r => r.total), '#22c55e', '\u20ba');
+      drawBarChart('orders-chart',  ordChart.map(r => r.date), ordChart.map(r => r.count), '#3b82f6', '');
+    });
+
   } catch (ex) {
-    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Dashboard yüklenemedi: ${ex.message}</div>`;
+    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Dashboard y\u00fcklenemedi: ${ex.message}</div>`;
   }
 }
 
@@ -279,20 +383,17 @@ async function renderUsers(page = 1) {
         </div>
         <div class="table-wrapper">
           <table>
-            <thead><tr><th>Kullanıcı</th><th>E-posta</th><th>Rol</th><th>Durum</th><th>Kayıt Tarihi</th><th>İşlem</th></tr></thead>
+            <thead><tr><th>Kullanıcı</th><th>E-posta</th><th>Rol</th><th>Kayıt Tarihi</th><th>İşlem</th></tr></thead>
             <tbody>
-              ${users.length === 0 ? `<tr><td colspan="6">${empty()}</td></tr>` : users.map(u => `
+              ${users.length === 0 ? `<tr><td colspan="5">${empty()}</td></tr>` : users.map(u => `
               <tr>
                 <td><strong>${u.username}</strong><br><small style="color:var(--text-muted)">${u.full_name || ''}</small></td>
                 <td>${u.email}</td>
                 <td>${roleBadge(u.role)}</td>
-                <td>${activeBadge(u.is_active)}</td>
                 <td>${fmt(u.created_at)}</td>
                 <td>
                   <button class="btn btn-outline btn-sm" onclick="openEditUser('${u.id}')">Düzenle</button>
-                  ${u.is_active
-                    ? `<button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="confirmDeactivateUser('${u.id}','${u.username}')">Pasife Al</button>`
-                    : `<button class="btn btn-success btn-sm" style="margin-left:4px" onclick="activateUser('${u.id}')">Aktif Et</button>`}
+                  <button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="confirmDeleteUser('${u.id}','${u.username}')">Sil</button>
                 </td>
               </tr>`).join('')}
             </tbody>
@@ -390,23 +491,18 @@ async function openEditUser(id) {
   } catch (ex) { toast(ex.message, 'error'); }
 }
 
-function confirmDeactivateUser(id, username) {
-  showModal('Kullanıcıyı Pasife Al', `
-    <p><strong>${username}</strong> adlı kullanıcıyı pasife almak istediğinize emin misiniz?</p>
-    <p style="margin-top:8px;color:var(--text-muted);font-size:13px">Kullanıcı giriş yapamaz hale gelir.</p>
+function confirmDeleteUser(id, username) {
+  showModal('Kullanıcıyı Sil', `
+    <p><strong>${username}</strong> adlı kullanıcıyı kalıcı olarak silmek istediğinize emin misiniz?</p>
+    <p style="margin-top:8px;color:var(--text-muted);font-size:13px">Bu işlem geri alınamaz.</p>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="hideModal()">İptal</button>
-      <button class="btn btn-danger" onclick="deactivateUser('${id}')">Pasife Al</button>
+      <button class="btn btn-danger" onclick="deleteUser('${id}')">Kalıcı Sil</button>
     </div>`);
 }
 
-async function deactivateUser(id) {
-  try { await API.deleteUser(id); hideModal(); toast('Kullanıcı pasife alındı', 'success'); renderUsers(usersPage); }
-  catch (ex) { toast(ex.message, 'error'); }
-}
-
-async function activateUser(id) {
-  try { await API.updateUser(id, { is_active: true }); toast('Kullanıcı aktif edildi', 'success'); renderUsers(usersPage); }
+async function deleteUser(id) {
+  try { await API.deleteUser(id); hideModal(); toast('Kullanıcı silindi', 'success'); renderUsers(usersPage); }
   catch (ex) { toast(ex.message, 'error'); }
 }
 
@@ -446,7 +542,7 @@ async function renderOrders(page = 1) {
               ${orders.length === 0 ? `<tr><td colspan="6">${empty('Sipariş bulunamadı', '📦')}</td></tr>` : orders.map(o => `
               <tr>
                 <td><code style="font-size:11px">${o.id.slice(-8)}</code></td>
-                <td>${o.user_id}</td>
+                <td>${o.user ? `<strong>${o.user.username}</strong><br><small style="color:var(--text-muted)">${o.user.email}</small>` : `<code style="font-size:11px">${o.user_id.slice(-8)}</code>`}</td>
                 <td><strong>${fmtMoney(o.total)}</strong></td>
                 <td>${statusBadge(o.status)}</td>
                 <td>${fmt(o.created_at)}</td>
@@ -520,6 +616,8 @@ function openUpdateOrderStatus(id, currentStatus) {
 
 let productsPage = 1;
 const productsLimit = 20;
+let _pendingProductImages = [];
+let _isUploadingProductImage = false;
 
 async function renderProducts(page = 1) {
   productsPage = page;
@@ -579,7 +677,7 @@ async function renderProducts(page = 1) {
 function productFormHTML(p = null) {
   const v = p || {};
   return `
-    <form id="product-form" onsubmit="return false;">
+    <div id="product-form">
       <div class="form-row">
         <div class="form-group"><label>Ürün Adı (TR)</label><input type="text" id="pf-name-tr" value="${v.name?.tr || ''}" required /></div>
         <div class="form-group"><label>Ürün Adı (EN)</label><input type="text" id="pf-name-en" value="${v.name?.en || ''}" required /></div>
@@ -603,63 +701,194 @@ function productFormHTML(p = null) {
         </div>
         <div id="pf-image-preview" style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
-      <textarea id="pf-images" style="display:none">${(v.images || []).join('\n')}</textarea>
       ${p ? `<div class="form-group"><label>Durum</label><select id="pf-active"><option value="true" ${p.is_active?'selected':''}>Aktif</option><option value="false" ${!p.is_active?'selected':''}>Pasif</option></select></div>` : ''}
       <div class="modal-footer">
         <button type="button" class="btn btn-outline" onclick="hideModal()">İptal</button>
         <button type="button" class="btn btn-primary" id="pf-submit-btn">${p ? 'Güncelle' : 'Ekle'}</button>
       </div>
-    </form>`;
+    </div>`;
 }
 
-function bindUploadBtn() {
-  const uploadBtn = document.getElementById('pf-upload-btn');
-  if (!uploadBtn) return;
-  uploadBtn.addEventListener('click', async () => {
-    const fileInput = document.getElementById('pf-image-file');
-    const status = document.getElementById('pf-upload-status');
-    const preview = document.getElementById('pf-image-preview');
-    const file = fileInput.files[0];
-    if (!file) { status.textContent = 'Önce bir dosya seçin.'; return; }
-    uploadBtn.disabled = true; status.textContent = 'Yükleniyor...'; status.style.color = 'var(--text-muted)';
-    try {
-      const result = await API.uploadImage(file);
-      const fullUrl = result.url.startsWith('http') ? result.url : 'http://100.114.176.17:8000' + result.url;
-      const imagesArea = document.getElementById('pf-images');
-      imagesArea.value = imagesArea.value ? imagesArea.value + '\n' + fullUrl : fullUrl;
-      const img = document.createElement('img');
-      img.src = fullUrl;
-      img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border)';
-      preview.appendChild(img);
-      status.textContent = 'Yüklendi!'; status.style.color = 'var(--success)'; fileInput.value = '';
-    } catch (ex) {
-      status.textContent = 'Hata: ' + ex.message; status.style.color = 'var(--danger)';
-    } finally { uploadBtn.disabled = false; }
-  });
+function resolveProductImageUrl(url) {
+  if (!url) return '';
+  try {
+    return new URL(url, window.SC_BACKEND_ORIGIN || window.location.origin).toString();
+  } catch {
+    return url;
+  }
+}
+
+async function ensureAdminSession() {
+  const me = await API.me();
+  currentUser = me;
+  localStorage.setItem('sc_user', JSON.stringify(me));
+  if (me.role !== 'admin') {
+    throw new Error('Bu hesabin admin yetkisi yok.');
+  }
+  return me;
+}
+
+function renderProductImagePreview() {
+  const preview = document.getElementById('pf-image-preview');
+  if (!preview) return;
+
+  preview.innerHTML = _pendingProductImages.map((url, index) => `
+    <div style="position:relative;display:inline-flex">
+      <img src="${url}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" />
+      <button
+        type="button"
+        class="btn btn-danger btn-sm"
+        onclick="removePendingProductImage(${index})"
+        style="position:absolute;top:-6px;right:-6px;min-width:24px;height:24px;padding:0;border-radius:999px;line-height:1"
+      >×</button>
+    </div>
+  `).join('');
+}
+
+function removePendingProductImage(index) {
+  _pendingProductImages.splice(index, 1);
+  renderProductImagePreview();
+}
+
+function bindUploadBtn(existingUrls = []) {
+  return bindProductUploadFlow(existingUrls);
 }
 
 function getProductFormData(isEdit = false) {
+  return getFixedProductFormData(isEdit);
+}
+
+function syncPendingProductImages(existingUrls = []) {
+  _pendingProductImages = existingUrls.map(resolveProductImageUrl).filter(Boolean);
+  renderProductImagePreview();
+}
+
+function bindProductUploadFlow(existingUrls = []) {
+  syncPendingProductImages(existingUrls);
+
+  const uploadBtn = document.getElementById('pf-upload-btn');
+  if (!uploadBtn) return;
+  uploadBtn.type = 'button';
+
+  uploadBtn.onclick = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const fileInput = document.getElementById('pf-image-file');
+    const status = document.getElementById('pf-upload-status');
+    const file = fileInput?.files?.[0];
+
+    if (!file) {
+      status.textContent = 'Önce bir dosya seçin.';
+      status.style.color = 'var(--danger)';
+      return;
+    }
+
+    _isUploadingProductImage = true;
+    uploadBtn.disabled = true;
+    status.textContent = 'Yükleniyor...';
+    status.style.color = 'var(--text-muted)';
+
+    try {
+      await ensureAdminSession();
+      const result = await API.uploadImage(file);
+      const fullUrl = resolveProductImageUrl(result.url);
+
+      if (!_pendingProductImages.includes(fullUrl)) {
+        _pendingProductImages.push(fullUrl);
+      }
+
+      renderProductImagePreview();
+      status.textContent = 'Yüklendi!';
+      status.style.color = 'var(--success)';
+      fileInput.value = '';
+    } catch (ex) {
+      status.textContent = 'Hata: ' + ex.message;
+      status.style.color = 'var(--danger)';
+    } finally {
+      _isUploadingProductImage = false;
+      uploadBtn.disabled = false;
+    }
+  };
+}
+
+function getFixedProductFormData(isEdit = false) {
   const data = {
-    name: { tr: document.getElementById('pf-name-tr').value, en: document.getElementById('pf-name-en').value },
-    description: { tr: document.getElementById('pf-desc-tr').value, en: document.getElementById('pf-desc-en').value },
+    name: {
+      tr: document.getElementById('pf-name-tr').value,
+      en: document.getElementById('pf-name-en').value,
+    },
+    description: {
+      tr: document.getElementById('pf-desc-tr').value,
+      en: document.getElementById('pf-desc-en').value,
+    },
     price: parseFloat(document.getElementById('pf-price').value),
-    stock: parseInt(document.getElementById('pf-stock').value),
+    stock: parseInt(document.getElementById('pf-stock').value, 10),
     category: document.getElementById('pf-category').value,
     tags: document.getElementById('pf-tags').value.split(',').map(t => t.trim()).filter(Boolean),
-    images: document.getElementById('pf-images').value.split('\n').map(t => t.trim()).filter(Boolean),
+    images: [..._pendingProductImages],
   };
-  if (isEdit) data.is_active = document.getElementById('pf-active').value === 'true';
+
+  if (isEdit) {
+    data.is_active = document.getElementById('pf-active').value === 'true';
+  }
+
   return data;
 }
 
+async function submitProductForm(mode, productId = null) {
+  const btn = document.getElementById('pf-submit-btn');
+  if (!btn) return;
+
+  if (_isUploadingProductImage) {
+    toast('Gorsel yuklemesi bitmeden kaydedemezsiniz.', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = mode === 'edit' ? 'Guncelleniyor...' : 'Ekleniyor...';
+
+  try {
+    await ensureAdminSession();
+    const payload = getFixedProductFormData(mode === 'edit');
+
+    if (mode === 'edit') {
+      await API.updateProduct(productId, payload);
+      toast('Urun guncellendi', 'success');
+    } else {
+      await API.createProduct(payload);
+      toast('Urun eklendi', 'success');
+    }
+
+    hideModal();
+    renderProducts(productsPage);
+  } catch (ex) {
+    toast(ex.message, 'error');
+    btn.disabled = false;
+    btn.textContent = mode === 'edit' ? 'Guncelle' : 'Ekle';
+  }
+}
+
 function openAddProduct() {
+  _pendingProductImages = [];
+  _isUploadingProductImage = false;
   showModal('Yeni Ürün Ekle', productFormHTML());
-  bindUploadBtn();
+  bindProductUploadFlow([]);
+  const submitBtn = document.getElementById('pf-submit-btn');
+  if (submitBtn) {
+    submitBtn.onclick = () => submitProductForm('create');
+    return;
+  }
   document.getElementById('pf-submit-btn').addEventListener('click', async () => {
     const btn = document.getElementById('pf-submit-btn');
+    if (_isUploadingProductImage) {
+      toast('Görsel yüklemesi bitmeden kaydedemezsiniz.', 'error');
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Ekleniyor...';
     try {
-      await API.createProduct(getProductFormData(false));
+      await API.createProduct(getFixedProductFormData(false));
       hideModal(); toast('Ürün eklendi', 'success'); renderProducts(productsPage);
     } catch (ex) { toast(ex.message, 'error'); btn.disabled = false; btn.textContent = 'Ekle'; }
   });
@@ -667,21 +896,24 @@ function openAddProduct() {
 
 function openEditProduct(productId) {
   const p = _productCache[productId];
+  _isUploadingProductImage = false;
   if (!p) { toast('Ürün bulunamadı', 'error'); return; }
   showModal('Ürün Düzenle', productFormHTML(p));
-  bindUploadBtn();
-  const preview = document.getElementById('pf-image-preview');
-  (p.images || []).forEach(url => {
-    const img = document.createElement('img');
-    img.src = url;
-    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:1px solid var(--border)';
-    preview.appendChild(img);
-  });
+  bindProductUploadFlow(p.images || []);
+  const submitBtn = document.getElementById('pf-submit-btn');
+  if (submitBtn) {
+    submitBtn.onclick = () => submitProductForm('edit', p.id);
+    return;
+  }
   document.getElementById('pf-submit-btn').addEventListener('click', async () => {
     const btn = document.getElementById('pf-submit-btn');
+    if (_isUploadingProductImage) {
+      toast('Görsel yüklemesi bitmeden kaydedemezsiniz.', 'error');
+      return;
+    }
     btn.disabled = true; btn.textContent = 'Güncelleniyor...';
     try {
-      await API.updateProduct(p.id, getProductFormData(true));
+      await API.updateProduct(p.id, getFixedProductFormData(true));
       hideModal(); toast('Ürün güncellendi', 'success'); renderProducts(productsPage);
     } catch (ex) { toast(ex.message, 'error'); btn.disabled = false; btn.textContent = 'Güncelle'; }
   });
@@ -700,6 +932,184 @@ function confirmDeleteProduct(id, name) {
 async function deleteProduct(id) {
   try { await API.deleteProduct(id); hideModal(); toast('Ürün silindi', 'success'); renderProducts(productsPage); }
   catch (ex) { toast(ex.message, 'error'); }
+}
+
+/* ─── KOMUT LOGLARI ────────────────────────────────────────────── */
+
+let logsPage = 1;
+const logsLimit = 50;
+
+function startAdminLiveWS() {
+  if (adminLiveWS && adminLiveWS.readyState === WebSocket.OPEN) return;
+  const token = localStorage.getItem('sc_token');
+  if (!token) return;
+  const wsOrigin = (window.SC_BACKEND_ORIGIN || '').replace(/^http/i, 'ws');
+  adminLiveWS = new WebSocket(`${wsOrigin}/api/v1/ws/admin/live?token=${encodeURIComponent(token)}`);
+  adminLiveWS.onopen = () => {
+    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
+    if (dot) dot.style.background = '#22c55e';
+    if (lbl) lbl.textContent = 'Canlı';
+    adminLiveWS._pingInterval = setInterval(() => { if (adminLiveWS.readyState === WebSocket.OPEN) adminLiveWS.send('ping'); }, 30000);
+  };
+  adminLiveWS.onmessage = (e) => {
+    try { const msg = JSON.parse(e.data); if (msg.type === 'live_command') prependLiveRow(msg); } catch {}
+  };
+  adminLiveWS.onclose = () => {
+    clearInterval(adminLiveWS?._pingInterval);
+    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
+    if (dot) dot.style.background = '#ef4444'; if (lbl) lbl.textContent = 'Bağlantı kesildi';
+  };
+  adminLiveWS.onerror = () => {
+    const dot = document.getElementById('live-dot'), lbl = document.getElementById('live-label');
+    if (dot) dot.style.background = '#f59e0b'; if (lbl) lbl.textContent = 'Hata';
+  };
+}
+
+function stopAdminLiveWS() {
+  if (adminLiveWS) { clearInterval(adminLiveWS._pingInterval); adminLiveWS.close(); adminLiveWS = null; }
+}
+
+function makeLiveKey(msg) {
+  return [
+    msg.id || '',
+    msg.timestamp || '',
+    msg.car_id || '',
+    msg.command || '',
+    msg.username || '',
+    msg.speed ?? '',
+  ].join('|');
+}
+
+function prependLiveRow(msg) {
+  const key = makeLiveKey(msg);
+  if (liveSeenKeys.has(key)) return;
+  liveSeenKeys.add(key);
+
+  const tbody = document.getElementById('live-log-tbody');
+  if (!tbody) return;
+  if (tbody.rows.length === 1 && tbody.rows[0].cells.length === 1) tbody.innerHTML = '';
+  while (tbody.rows.length >= 100) tbody.deleteRow(tbody.rows.length - 1);
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td>${cmdBadge(msg.command)}</td>
+    <td><strong>${msg.username || '?'}</strong></td>
+    <td>${msg.car_id}</td>
+    <td>${msg.speed ?? '-'}</td>
+    <td>${(msg.x_axis ?? 0).toFixed(2)}</td>
+    <td>${(msg.y_axis ?? 0).toFixed(2)}</td>
+    <td>${msg.latency_ms != null ? msg.latency_ms + ' ms' : '-'}</td>
+    <td><span style="color:${msg.car_reached ? '#22c55e' : '#ef4444'}">${msg.car_reached ? '✓' : '✗'}</span></td>
+    <td>${fmt(msg.timestamp)}</td>`;
+  tbody.insertBefore(tr, tbody.firstChild);
+  const counter = document.getElementById('live-count');
+  if (counter) counter.textContent = parseInt(counter.textContent || '0') + 1;
+}
+
+async function pollLatestLogs() {
+  if (currentPage !== 'logs') return;
+  try {
+    const { logs } = await API.getLogs({ page: 1, limit: 20, hours: 168 });
+    logs.slice().reverse().forEach((log) => {
+      prependLiveRow({
+        id: log.id,
+        username: log.username || (log.user_id ? log.user_id.slice(-8) : '?'),
+        car_id: log.car_id,
+        command: log.command,
+        speed: log.speed,
+        x_axis: log.x_axis ?? 0,
+        y_axis: log.y_axis ?? 0,
+        latency_ms: log.latency_ms,
+        car_reached: log.car_reached ?? true,
+        timestamp: log.timestamp,
+      });
+    });
+  } catch {}
+}
+
+function startLogsPolling() {
+  stopLogsPolling();
+  pollLatestLogs();
+  logsPollInterval = setInterval(pollLatestLogs, 2000);
+}
+
+function stopLogsPolling() {
+  if (logsPollInterval) {
+    clearInterval(logsPollInterval);
+    logsPollInterval = null;
+  }
+}
+
+async function renderLogs(page = 1) {
+  logsPage = page;
+  const cmdFilter = document.getElementById('log-cmd-filter')?.value || '';
+  try {
+    const params = { page, limit: logsLimit, hours: 168 };
+    if (cmdFilter) params.command = cmdFilter;
+    const { logs, total } = await API.getLogs(params);
+    const totalPages = Math.ceil(total / logsLimit);
+    liveSeenKeys.clear();
+    logs.forEach((log) => liveSeenKeys.add(makeLiveKey(log)));
+
+    document.getElementById('content').innerHTML = `
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px">
+          <span class="card-title">Canlı Komut Akışı</span>
+          <span id="live-dot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#6b7280;margin-left:4px"></span>
+          <span id="live-label" style="font-size:12px;color:var(--text-muted)">Bağlanıyor...</span>
+          <span style="margin-left:auto;font-size:12px;color:var(--text-muted)">Bu oturumda: <strong id="live-count">0</strong> komut</span>
+        </div>
+        <div class="table-wrapper" style="max-height:280px;overflow-y:auto">
+          <table>
+            <thead><tr><th>Komut</th><th>Kullanıcı</th><th>Araba</th><th>Hız</th><th>X</th><th>Y</th><th>Gecikme</th><th>Ulaştı</th><th>Zaman</th></tr></thead>
+            <tbody id="live-log-tbody">
+              <tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:20px">Joystick'ten komut bekleniyor...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Geçmiş Loglar (Son 7 Gün)</span></div>
+        <div class="filters">
+          <div class="form-group">
+            <select id="log-cmd-filter">
+              <option value="">Tüm Komutlar</option>
+              ${['forward','backward','left','right','stop','drift'].map(c => `<option value="${c}" ${cmdFilter===c?'selected':''}>${c}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" id="log-filter-btn">Filtrele</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Komut</th><th>Kullanıcı</th><th>Hız</th><th>X</th><th>Y</th><th>Gecikme</th><th>Zaman</th></tr></thead>
+            <tbody>
+              ${logs.length === 0 ? `<tr><td colspan="7">${empty('Log bulunamadı', '📋')}</td></tr>` : logs.map(l => `
+              <tr>
+                <td>${cmdBadge(l.command)}</td>
+                <td><code style="font-size:11px">${l.username || l.user_id?.slice(-8) || '-'}</code></td>
+                <td>${l.speed ?? '-'}</td>
+                <td>${l.x_axis?.toFixed(2) ?? '-'}</td>
+                <td>${l.y_axis?.toFixed(2) ?? '-'}</td>
+                <td>${l.latency_ms != null ? l.latency_ms + ' ms' : '-'}</td>
+                <td>${fmt(l.timestamp)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <span class="pagination-info">Son 7 günde ${total} komut — Sayfa ${page}/${totalPages || 1}</span>
+          <div class="pagination-btns">
+            <button class="btn btn-outline btn-sm" ${page<=1?'disabled':''} onclick="renderLogs(${page-1})">← Önceki</button>
+            <button class="btn btn-outline btn-sm" ${page>=totalPages?'disabled':''} onclick="renderLogs(${page+1})">Sonraki →</button>
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('log-filter-btn').addEventListener('click', () => renderLogs(1));
+    startAdminLiveWS();
+    startLogsPolling();
+  } catch (ex) {
+    document.getElementById('content').innerHTML = `<div class="alert alert-danger">Loglar yüklenemedi: ${ex.message}</div>`;
+  }
 }
 
 /* ─── BAĞLI ARABALAR ──────────────────────────────────────────── */

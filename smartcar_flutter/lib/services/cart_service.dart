@@ -5,7 +5,7 @@ class CartService {
   final _dio = ApiClient().dio;
 
   Future<Cart> get() async {
-    final res = await _dio.get('/cart');
+    final res = await _dio.get('/cart/');
     return Cart.fromJson(res.data);
   }
 

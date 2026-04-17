@@ -17,13 +17,11 @@
         <p>Admin Panel</p>
       </div>
 
-      <!-- Sekmeler -->
       <div class="tab-bar">
         <button class="tab-btn active" data-tab="login">Giriş Yap</button>
         <button class="tab-btn" data-tab="register">Admin Kaydı</button>
       </div>
 
-      <!-- Giriş Formu -->
       <div id="tab-login">
         <form id="login-form">
           <div class="form-group">
@@ -39,7 +37,6 @@
         </form>
       </div>
 
-      <!-- Kayıt Formu -->
       <div id="tab-register" class="hidden">
         <div class="alert alert-info" style="margin-bottom:12px;font-size:13px;">
           Bu form yalnızca <strong>ilk admin</strong> hesabı oluşturmak içindir.
@@ -81,7 +78,6 @@
   <!-- ─── ANA PANEL ─────────────────────────────────────────── -->
   <div id="app" class="hidden">
 
-    <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
         <span class="logo-icon">🚗</span>
@@ -100,9 +96,6 @@
         <a href="#products" class="nav-item" data-page="products">
           <span class="nav-icon">🛒</span> Ürünler
         </a>
-        <a href="#cars" class="nav-item" data-page="cars">
-          <span class="nav-icon">📡</span> Bağlı Arabalar
-        </a>
       </nav>
       <div class="sidebar-footer">
         <div id="sidebar-user"></div>
@@ -110,7 +103,6 @@
       </div>
     </aside>
 
-    <!-- İçerik -->
     <main id="main">
       <header id="topbar">
         <h2 id="page-title">Dashboard</h2>
@@ -131,7 +123,6 @@
     </div>
   </div>
 
-  <!-- ─── TOAST ─────────────────────────────────────────────── -->
   <div id="toast-container"></div>
 
   <script src="js/api.js"></script>

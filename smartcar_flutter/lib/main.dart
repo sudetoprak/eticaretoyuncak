@@ -27,18 +27,16 @@ class SmartCarApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: const ColorScheme.light(
-          primary: Color(0xFF3B82F6),
-          surface: Color(0xFFF8FAFC),
+          primary: Color(0xFF1E3A8A),
+          surface: Colors.white,
         ),
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        scaffoldBackgroundColor: Colors.white,
         fontFamily: 'Roboto',
       ),
       home: const _RootWidget(),
     );
   }
 }
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
 
 class _RootWidget extends StatelessWidget {
   const _RootWidget();
@@ -49,8 +47,10 @@ class _RootWidget extends StatelessWidget {
 
     if (auth.isLoading) {
       return const Scaffold(
-        backgroundColor: Color(0xFFF8FAFC),
-        body: Center(child: CircularProgressIndicator(color: Color(0xFF3B82F6))),
+        backgroundColor: Colors.white,
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF1E3A8A)),
+        ),
       );
     }
 
@@ -92,45 +92,14 @@ class _MainTabsState extends State<_MainTabs> {
   int _tabIndex = 0;
   Key _cartKey = UniqueKey();
 
-  static const _titles = ['Ana Sayfa', 'Sepet', 'Profil'];
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: const Color(0xFFE2E8F0),
-        title: Row(
-          children: [
-            Container(
-              width: 30,
-              height: 30,
-              decoration: BoxDecoration(
-                color: const Color(0xFF3B82F6),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(Icons.directions_car, color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              _titles[_tabIndex],
-              style: const TextStyle(
-                  color: Color(0xFF0F172A), fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-          ],
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: const Color(0xFFE2E8F0)),
-        ),
-      ),
+      backgroundColor: Colors.white,
       body: IndexedStack(
         index: _tabIndex,
         children: [
-          _ShopFlow(),
+          const HomeScreen(),
           _CartFlow(key: _cartKey),
           const ProfileScreen(),
         ],
@@ -143,29 +112,32 @@ class _MainTabsState extends State<_MainTabs> {
         child: BottomNavigationBar(
           currentIndex: _tabIndex,
           onTap: (i) => setState(() {
-            if (i == 1) _cartKey = UniqueKey(); // Sepete her geçişte yenile
+            if (i == 1) _cartKey = UniqueKey();
             _tabIndex = i;
           }),
           backgroundColor: Colors.white,
-          selectedItemColor: const Color(0xFF3B82F6),
-          unselectedItemColor: const Color(0xFFB0BEC5),
+          selectedItemColor: const Color(0xFF1E3A8A),
+          unselectedItemColor: const Color(0xFFCBD5E1),
           type: BottomNavigationBarType.fixed,
           selectedFontSize: 11,
           unselectedFontSize: 11,
           elevation: 0,
           items: const [
             BottomNavigationBarItem(
-                icon: Icon(Icons.home_outlined),
-                activeIcon: Icon(Icons.home),
-                label: 'Ana Sayfa'),
+              icon: Icon(Icons.home_outlined),
+              activeIcon: Icon(Icons.home),
+              label: 'Ana Sayfa',
+            ),
             BottomNavigationBarItem(
-                icon: Icon(Icons.shopping_cart_outlined),
-                activeIcon: Icon(Icons.shopping_cart),
-                label: 'Sepet'),
+              icon: Icon(Icons.shopping_cart_outlined),
+              activeIcon: Icon(Icons.shopping_cart),
+              label: 'Sepet',
+            ),
             BottomNavigationBarItem(
-                icon: Icon(Icons.person_outline),
-                activeIcon: Icon(Icons.person),
-                label: 'Profil'),
+              icon: Icon(Icons.person_outline),
+              activeIcon: Icon(Icons.person),
+              label: 'Profil',
+            ),
           ],
         ),
       ),
@@ -173,17 +145,11 @@ class _MainTabsState extends State<_MainTabs> {
   }
 }
 
-// ─── Shop Flow ────────────────────────────────────────────────────────────────
-
-class _ShopFlow extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => const HomeScreen();
-}
-
 // ─── Cart Flow ────────────────────────────────────────────────────────────────
 
 class _CartFlow extends StatefulWidget {
   const _CartFlow({super.key});
+
   @override
   State<_CartFlow> createState() => _CartFlowState();
 }

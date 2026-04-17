@@ -29,12 +29,11 @@ app = FastAPI(
 )
 
 # ─── UPLOADS KLASÖRÜ ──────────────────────────────────────────────────────────
-os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+os.makedirs(settings.uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=settings.uploads_dir), name="uploads")
 
 # ─── MIDDLEWARE ────────────────────────────────────────────────────────────────
-app.add_middleware(DDoSProtectionMiddleware, rate_limit=settings.RATE_LIMIT_PER_MINUTE)
-
+# CORS en önce eklenmeli (LIFO sırası nedeniyle ilk çalışan olur)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,6 +41,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# DDoS koruması CORS'tan sonra eklenir
+app.add_middleware(DDoSProtectionMiddleware, rate_limit=settings.RATE_LIMIT_PER_MINUTE)
 
 # ─── ROUTERS ──────────────────────────────────────────────────────────────────
 API_PREFIX = "/api/v1"
@@ -51,7 +53,7 @@ app.include_router(cart_router,     prefix=API_PREFIX)
 app.include_router(order_router,    prefix=API_PREFIX)
 app.include_router(logs_router,     prefix=API_PREFIX)
 app.include_router(admin_router,    prefix=API_PREFIX)
-app.include_router(ws_router, prefix=API_PREFIX)
+app.include_router(ws_router,       prefix=API_PREFIX)
 
 # ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
 @app.get("/health")
